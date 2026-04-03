@@ -13,7 +13,7 @@ bot = commands.Bot(command_prefix=".", intents=intents)
 
 # IDs allowed to win
 ALLOWED_WINNERS = {
-    123456789012345678,
+    1435635557035278377,
     987654321098765432,
     112233445566778899
 }
