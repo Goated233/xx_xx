@@ -79,8 +79,8 @@ async def gw(ctx, action=None, duration=None, *, prize=None):
     if not reaction:
         return await ctx.send("No one entered the giveaway.")
 
-    users = await reaction.users().flatten()
-    users = [u for u in users if not u.bot]
+    # NEW: Correct way to fetch users (no flatten)
+    users = [u async for u in reaction.users() if not u.bot]
 
     # Save all users for fallback + reroll
     current_giveaway["all_users"] = users
