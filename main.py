@@ -15,6 +15,7 @@ intents.guilds = True
 intents.members = True
 
 bot = commands.Bot(command_prefix=".", intents=intents)
+bot.remove_command("help")  # IMPORTANT FIX
 
 # -----------------------------
 # GLOBAL STORAGE
@@ -39,73 +40,52 @@ current_giveaway = {
 HOST_DM_FILE = Path("host_dm_settings.json")
 HOST_DM = {}  # {str(user_id): bool}
 
-
 def load_host_dm():
     global HOST_DM
     if HOST_DM_FILE.exists():
         try:
-            with open(HOST_DM_FILE, "r") as f:
-                HOST_DM = json.load(f)
-        except Exception:
+            HOST_DM = json.load(open(HOST_DM_FILE, "r"))
+        except:
             HOST_DM = {}
     else:
         HOST_DM = {}
 
-
 def save_host_dm():
-    try:
-        with open(HOST_DM_FILE, "w") as f:
-            json.dump(HOST_DM, f)
-    except Exception:
-        pass
-
+    json.dump(HOST_DM, open(HOST_DM_FILE, "w"))
 
 def host_dm_enabled(uid: int) -> bool:
     return HOST_DM.get(str(uid), True)
 
-
 def set_host_dm(uid: int, enabled: bool):
     HOST_DM[str(uid)] = enabled
     save_host_dm()
-
 
 # -----------------------------
 # WHITELIST (JSON)
 # -----------------------------
 
 WHITELIST_FILE = Path("whitelist.json")
-WHITELIST = set()  # set of user IDs
-
+WHITELIST = set()
 
 def load_whitelist():
     global WHITELIST
     if WHITELIST_FILE.exists():
         try:
-            with open(WHITELIST_FILE, "r") as f:
-                data = json.load(f)
-                WHITELIST = set(data)
-        except Exception:
+            WHITELIST = set(json.load(open(WHITELIST_FILE, "r")))
+        except:
             WHITELIST = set()
     else:
         WHITELIST = set()
 
-
 def save_whitelist():
-    try:
-        with open(WHITELIST_FILE, "w") as f:
-            json.dump(list(WHITELIST), f)
-    except Exception:
-        pass
-
+    json.dump(list(WHITELIST), open(WHITELIST_FILE, "w"))
 
 def is_whitelisted():
     async def predicate(ctx):
-        # server owner always allowed
-        if ctx.guild is not None and ctx.author.id == ctx.guild.owner_id:
+        if ctx.guild and ctx.author.id == ctx.guild.owner_id:
             return True
         return ctx.author.id in WHITELIST
     return commands.check(predicate)
-
 
 # -----------------------------
 # LOGGING HELPERS
@@ -116,28 +96,26 @@ def get_log_channel():
         return None
     return bot.get_channel(LOG_CHANNEL_ID)
 
-
-async def log_event(embed: discord.Embed = None, content: str = None):
+async def log_event(embed=None, content=None):
     ch = get_log_channel()
     if ch:
         try:
             await ch.send(content=content, embed=embed)
-        except Exception:
+        except:
             pass
 
-
-async def dm_host(uid: int, embed: discord.Embed = None, content: str = None, important: bool = False):
+async def dm_host(uid: int, embed=None, content=None, important=False):
     if not host_dm_enabled(uid):
         return
     user = bot.get_user(uid)
     if not user:
         return
     try:
-        if important and embed is not None:
+        if important and embed:
             await user.send(embed=embed)
-        elif content is not None:
+        elif content:
             await user.send(content)
-    except Exception:
+    except:
         err = discord.Embed(
             title="Host DM Failed",
             description=f"Could not DM <@{uid}>.",
@@ -145,7 +123,6 @@ async def dm_host(uid: int, embed: discord.Embed = None, content: str = None, im
             timestamp=datetime.utcnow()
         )
         await log_event(embed=err)
-
 
 # -----------------------------
 # BOT READY
@@ -158,13 +135,11 @@ async def on_ready():
     print(f"Logged in as {bot.user}")
     embed = discord.Embed(
         title="Bot Started",
-        description=f"Logged in as {bot.user} ({bot.user.id})",
+        description=f"Logged in as {bot.user}",
         color=0x3498db,
         timestamp=datetime.utcnow()
     )
     await log_event(embed=embed)
-
-
 # -----------------------------
 # WHITELIST COMMANDS
 # -----------------------------
@@ -172,64 +147,41 @@ async def on_ready():
 @bot.command()
 @is_whitelisted()
 async def addwl(ctx, user: discord.User):
-    """Owner only: add user to whitelist."""
-    if ctx.guild is None or ctx.author.id != ctx.guild.owner_id:
+    if ctx.author.id != ctx.guild.owner_id:
         return await ctx.send("Only the server owner can modify the whitelist.")
     WHITELIST.add(user.id)
     save_whitelist()
-    await ctx.send(f"Added {user.mention} to the whitelist.")
-
-    embed = discord.Embed(
-        title="Whitelist Updated",
-        description=f"Added {user.mention} to whitelist.",
-        color=0x2ecc71,
-        timestamp=datetime.utcnow()
-    )
-    await log_event(embed=embed)
-
+    await ctx.send(f"Added {user.mention} to whitelist.")
 
 @bot.command()
 @is_whitelisted()
 async def delwl(ctx, user: discord.User):
-    """Owner only: remove user from whitelist."""
-    if ctx.guild is None or ctx.author.id != ctx.guild.owner_id:
+    if ctx.author.id != ctx.guild.owner_id:
         return await ctx.send("Only the server owner can modify the whitelist.")
     WHITELIST.discard(user.id)
     save_whitelist()
-    await ctx.send(f"Removed {user.mention} from the whitelist.")
-
-    embed = discord.Embed(
-        title="Whitelist Updated",
-        description=f"Removed {user.mention} from whitelist.",
-        color=0xe67e22,
-        timestamp=datetime.utcnow()
-    )
-    await log_event(embed=embed)
-
+    await ctx.send(f"Removed {user.mention} from whitelist.")
 
 # -----------------------------
-# ADMIN / CONTROL COMMANDS
+# ADMIN COMMANDS
 # -----------------------------
 
 @bot.command()
 @is_whitelisted()
 async def addwinner(ctx, user_id: int):
-    """Add a user ID to allowed winners."""
     ALLOWED_WINNERS.add(user_id)
     embed = discord.Embed(
         title="Winner ID Added",
-        description=f"Added <@{user_id}> (`{user_id}`) to allowed winners.",
+        description=f"Added <@{user_id}>",
         color=0x2ecc71,
         timestamp=datetime.utcnow()
     )
     await ctx.send(embed=embed)
     await log_event(embed=embed)
 
-
 @bot.command()
 @is_whitelisted()
 async def setlog(ctx, channel_id: int):
-    """Set log channel by ID."""
     global LOG_CHANNEL_ID
     ch = ctx.guild.get_channel(channel_id)
     if not ch:
@@ -237,18 +189,16 @@ async def setlog(ctx, channel_id: int):
     LOG_CHANNEL_ID = channel_id
     embed = discord.Embed(
         title="Log Channel Set",
-        description=f"Logs will now go to {ch.mention}.",
+        description=f"Logs will go to {ch.mention}",
         color=0x3498db,
         timestamp=datetime.utcnow()
     )
     await ctx.send(embed=embed)
     await log_event(embed=embed)
 
-
 @bot.command()
 @is_whitelisted()
 async def togglehostdm(ctx):
-    """Toggle your host DM notifications."""
     uid = ctx.author.id
     new_state = not host_dm_enabled(uid)
     set_host_dm(uid, new_state)
@@ -262,7 +212,6 @@ async def togglehostdm(ctx):
     await ctx.send(embed=embed)
     await log_event(embed=embed)
 
-
 # -----------------------------
 # GIVEAWAY COMMAND
 # -----------------------------
@@ -270,33 +219,31 @@ async def togglehostdm(ctx):
 @bot.command()
 @is_whitelisted()
 async def gw(ctx, action=None, duration=None, *, prize=None):
-    """Start a giveaway: .gw start <duration> <prize>"""
     if action != "start":
         return await ctx.send("Usage: `.gw start <duration> <prize>`")
 
     if not duration or not prize:
-        return await ctx.send("You must provide a duration and a prize.")
+        return await ctx.send("Missing duration or prize.")
 
     try:
         num = int(duration[:-1])
         unit = duration[-1]
-    except Exception:
-        return await ctx.send("Invalid duration format. Example: `1h`, `30m`")
+    except:
+        return await ctx.send("Invalid duration format.")
 
     if unit == "h":
         delta = timedelta(hours=num)
     elif unit == "m":
         delta = timedelta(minutes=num)
     else:
-        return await ctx.send("Invalid duration format. Use `h` or `m`.")
+        return await ctx.send("Use `h` or `m`.")
 
     end = datetime.utcnow() + delta
     ts = int(end.timestamp())
 
-    # Old giveaway UI
     embed = discord.Embed(
         title=prize,
-        description="React with 🎉 to enter the giveaway.",
+        description="React with 🎉 to enter.",
         color=0x00ffcc
     )
     embed.add_field(name="Ends:", value=f"<t:{ts}:R> (<t:{ts}:f>)", inline=False)
@@ -306,21 +253,23 @@ async def gw(ctx, action=None, duration=None, *, prize=None):
     msg = await ctx.send(embed=embed)
     await msg.add_reaction("🎉")
 
-    current_giveaway["message_id"] = msg.id
-    current_giveaway["channel_id"] = msg.channel.id
-    current_giveaway["prize"] = prize
-    current_giveaway["host_id"] = ctx.author.id
-    current_giveaway["entrants"] = []
-    current_giveaway["all_users"] = []
+    current_giveaway.update({
+        "message_id": msg.id,
+        "channel_id": msg.channel.id,
+        "prize": prize,
+        "host_id": ctx.author.id,
+        "entrants": [],
+        "all_users": []
+    })
 
     start_embed = discord.Embed(
         title="Giveaway Started",
         color=0x00ffcc,
         timestamp=datetime.utcnow()
     )
-    start_embed.add_field(name="Prize", value=prize, inline=False)
-    start_embed.add_field(name="Host", value=ctx.author.mention, inline=True)
-    start_embed.add_field(name="Message", value=f"[Jump to giveaway]({msg.jump_url})", inline=False)
+    start_embed.add_field(name="Prize", value=prize)
+    start_embed.add_field(name="Host", value=ctx.author.mention)
+    start_embed.add_field(name="Message", value=f"[Jump]({msg.jump_url})")
 
     await log_event(embed=start_embed)
     await dm_host(ctx.author.id, embed=start_embed, important=True)
@@ -330,24 +279,22 @@ async def gw(ctx, action=None, duration=None, *, prize=None):
         await asyncio.sleep(delta.total_seconds() - 60)
         warn = discord.Embed(
             title="Giveaway Ending Soon",
-            description="Your giveaway ends in **1 minute**.",
+            description="Ends in **1 minute**.",
             color=0xf1c40f,
             timestamp=datetime.utcnow()
         )
-        warn.add_field(name="Prize", value=prize, inline=False)
-        warn.add_field(name="Message", value=f"[Jump to giveaway]({msg.jump_url})", inline=False)
+        warn.add_field(name="Prize", value=prize)
         await log_event(embed=warn)
         await dm_host(current_giveaway["host_id"], embed=warn, important=True)
         await asyncio.sleep(60)
     else:
         await asyncio.sleep(delta.total_seconds())
 
-    # End of giveaway
+    # END
     ch = bot.get_channel(current_giveaway["channel_id"])
     if not ch:
         err = discord.Embed(
             title="Giveaway Channel Deleted",
-            description="The channel containing the giveaway was deleted.",
             color=0xe74c3c,
             timestamp=datetime.utcnow()
         )
@@ -357,10 +304,9 @@ async def gw(ctx, action=None, duration=None, *, prize=None):
 
     try:
         msg = await ch.fetch_message(current_giveaway["message_id"])
-    except discord.NotFound:
+    except:
         err = discord.Embed(
             title="Giveaway Message Deleted",
-            description="The giveaway message was deleted.",
             color=0xe74c3c,
             timestamp=datetime.utcnow()
         )
@@ -370,29 +316,25 @@ async def gw(ctx, action=None, duration=None, *, prize=None):
 
     reaction = discord.utils.get(msg.reactions, emoji="🎉")
     if not reaction:
-        await ctx.send("No one entered the giveaway.")
+        await ctx.send("No one entered.")
         no_entry = discord.Embed(
-            title="Giveaway Ended — No Entries",
+            title="No Entries",
             description="Nobody entered the giveaway.",
             color=0xe74c3c,
             timestamp=datetime.utcnow()
         )
-        no_entry.add_field(name="Prize", value=prize, inline=False)
-        no_entry.add_field(name="Host", value=f"<@{current_giveaway['host_id']}>", inline=True)
         await log_event(embed=no_entry)
         await dm_host(current_giveaway["host_id"], embed=no_entry, important=True)
         return
 
     users = [u async for u in reaction.users() if not u.bot]
     if not users:
-        await ctx.send("No valid users entered the giveaway.")
+        await ctx.send("No valid users.")
         no_valid = discord.Embed(
-            title="Giveaway Ended — No Valid Users",
-            description="No valid (non-bot) users entered.",
+            title="No Valid Users",
             color=0xe74c3c,
             timestamp=datetime.utcnow()
         )
-        no_valid.add_field(name="Prize", value=prize, inline=False)
         await log_event(embed=no_valid)
         await dm_host(current_giveaway["host_id"], embed=no_valid, important=True)
         return
@@ -406,72 +348,57 @@ async def gw(ctx, action=None, duration=None, *, prize=None):
         source = "Allowed Winner ID"
     else:
         winner = random.choice(users)
-        source = "Random (no allowed IDs)"
+        source = "Random"
 
-    await ctx.send(f"🎉 {winner.mention} has won the giveaway: **{prize}**")
-
-    joined_list = ", ".join(u.mention for u in users)
-    allowed_list = ", ".join(u.mention for u in eligible) if eligible else "None"
+    await ctx.send(f"🎉 {winner.mention} won **{prize}**")
 
     result = discord.Embed(
         title="Giveaway Result",
         color=0x2ecc71,
         timestamp=datetime.utcnow()
     )
-    result.add_field(name="Prize", value=prize, inline=False)
-    result.add_field(name="Winner", value=winner.mention, inline=True)
-    result.add_field(name="Winner Source", value=source, inline=True)
-    result.add_field(name="Total Entrants", value=str(len(users)), inline=True)
-    result.add_field(name="Allowed Entrants", value=str(len(eligible)), inline=True)
-    result.add_field(name="Entrants", value=joined_list or "None", inline=False)
-    result.add_field(name="Allowed Users", value=allowed_list, inline=False)
+    result.add_field(name="Prize", value=prize)
+    result.add_field(name="Winner", value=winner.mention)
+    result.add_field(name="Source", value=source)
 
     await log_event(embed=result)
     await dm_host(current_giveaway["host_id"], embed=result, important=True)
 
-
 # -----------------------------
-# REROLL COMMAND
+# REROLL
 # -----------------------------
 
 @bot.command()
 @is_whitelisted()
 async def reroll(ctx):
-    """Reroll the giveaway winner."""
     prize = current_giveaway["prize"]
     users = current_giveaway["all_users"]
     eligible = current_giveaway["entrants"]
     host = current_giveaway["host_id"]
 
     if not prize or not users:
-        return await ctx.send("There is no recent giveaway to reroll.")
+        return await ctx.send("No giveaway to reroll.")
 
     if eligible:
         winner = random.choice(eligible)
         source = "Allowed Winner ID (reroll)"
     else:
         winner = random.choice(users)
-        source = "Random (no allowed IDs) (reroll)"
+        source = "Random (reroll)"
 
-    await ctx.send(f"🔁 {winner.mention} has won the giveaway (reroll): **{prize}**")
-
-    joined_list = ", ".join(u.mention for u in users)
-    allowed_list = ", ".join(u.mention for u in eligible) if eligible else "None"
+    await ctx.send(f"🔁 {winner.mention} won **{prize}**")
 
     embed = discord.Embed(
         title="Giveaway Rerolled",
         color=0x3498db,
         timestamp=datetime.utcnow()
     )
-    embed.add_field(name="Prize", value=prize, inline=False)
-    embed.add_field(name="New Winner", value=winner.mention, inline=True)
-    embed.add_field(name="Winner Source", value=source, inline=True)
-    embed.add_field(name="Entrants", value=joined_list or "None", inline=False)
-    embed.add_field(name="Allowed Users", value=allowed_list, inline=False)
+    embed.add_field(name="Prize", value=prize)
+    embed.add_field(name="Winner", value=winner.mention)
+    embed.add_field(name="Source", value=source)
 
     await log_event(embed=embed)
     await dm_host(host, embed=embed, important=True)
-
 
 # -----------------------------
 # REACTION LOGGING
@@ -481,11 +408,7 @@ async def reroll(ctx):
 async def on_reaction_add(reaction, user):
     if user.bot:
         return
-
     if str(reaction.emoji) != "🎉":
-        return
-
-    if current_giveaway["message_id"] is None:
         return
     if reaction.message.id != current_giveaway["message_id"]:
         return
@@ -497,25 +420,17 @@ async def on_reaction_add(reaction, user):
         color=0x3498db,
         timestamp=datetime.utcnow()
     )
-    embed.add_field(name="User", value=user.mention, inline=True)
-    embed.add_field(name="Status", value=status, inline=True)
-    embed.add_field(name="Message", value=f"[Jump]({reaction.message.jump_url})", inline=False)
+    embed.add_field(name="User", value=user.mention)
+    embed.add_field(name="Status", value=status)
     await log_event(embed=embed)
 
-    host_id = current_giveaway["host_id"]
-    text = f"🎉 Entry added: {user.mention} ({status})"
-    await dm_host(host_id, content=text, important=False)
-
+    await dm_host(current_giveaway["host_id"], content=f"🎉 Entry added: {user.mention} ({status})")
 
 @bot.event
 async def on_reaction_remove(reaction, user):
     if user.bot:
         return
-
     if str(reaction.emoji) != "🎉":
-        return
-
-    if current_giveaway["message_id"] is None:
         return
     if reaction.message.id != current_giveaway["message_id"]:
         return
@@ -527,15 +442,11 @@ async def on_reaction_remove(reaction, user):
         color=0xe74c3c,
         timestamp=datetime.utcnow()
     )
-    embed.add_field(name="User", value=user.mention, inline=True)
-    embed.add_field(name="Status", value=status, inline=True)
-    embed.add_field(name="Message", value=f"[Jump]({reaction.message.jump_url})", inline=False)
+    embed.add_field(name="User", value=user.mention)
+    embed.add_field(name="Status", value=status)
     await log_event(embed=embed)
 
-    host_id = current_giveaway["host_id"]
-    text = f"❌ Entry removed: {user.mention} ({status})"
-    await dm_host(host_id, content=text, important=False)
-
+    await dm_host(current_giveaway["host_id"], content=f"❌ Entry removed: {user.mention} ({status})")
 
 # -----------------------------
 # ERROR LOGGING
@@ -551,24 +462,18 @@ async def on_error(event, *args, **kwargs):
     )
     await log_event(embed=embed)
 
-
 @bot.event
 async def on_command_error(ctx, error):
     embed = discord.Embed(
         title="Command Error",
-        description=f"Error: `{error}`",
+        description=str(error),
         color=0xe74c3c,
         timestamp=datetime.utcnow()
     )
-    embed.add_field(name="User", value=ctx.author.mention, inline=True)
-    if ctx.command:
-        embed.add_field(name="Command", value=ctx.command.qualified_name, inline=True)
     await log_event(embed=embed)
-    await ctx.send("An error occurred while running that command.")
-
-
+    await ctx.send("An error occurred.")
 # -----------------------------
-# HELP COMMAND WITH EMOJI BUTTONS
+# HELP MENU WITH EMOJI BUTTONS
 # -----------------------------
 
 class HelpMenu(View):
@@ -581,16 +486,8 @@ class HelpMenu(View):
             title="🎉 Giveaway Commands",
             color=0x00ffcc
         )
-        embed.add_field(
-            name=".gw start <time> <prize>",
-            value="Start a giveaway. Example: `.gw start 10m Nitro`",
-            inline=False
-        )
-        embed.add_field(
-            name=".reroll",
-            value="Reroll the last giveaway winner.",
-            inline=False
-        )
+        embed.add_field(name=".gw start <time> <prize>", value="Start a giveaway.", inline=False)
+        embed.add_field(name=".reroll", value="Reroll the last giveaway.", inline=False)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @discord.ui.button(label="Admin", emoji="🛠️", style=discord.ButtonStyle.secondary)
@@ -599,21 +496,9 @@ class HelpMenu(View):
             title="🛠️ Admin Commands",
             color=0x3498db
         )
-        embed.add_field(
-            name=".setlog <channel_id>",
-            value="Set the log channel where all logs are sent.",
-            inline=False
-        )
-        embed.add_field(
-            name=".addwinner <user_id>",
-            value="Add a user ID to the allowed winners list.",
-            inline=False
-        )
-        embed.add_field(
-            name=".togglehostdm",
-            value="Toggle whether you receive DMs for giveaway events.",
-            inline=False
-        )
+        embed.add_field(name=".setlog <channel_id>", value="Set log channel.", inline=False)
+        embed.add_field(name=".addwinner <user_id>", value="Add allowed winner ID.", inline=False)
+        embed.add_field(name=".togglehostdm", value="Toggle host DM notifications.", inline=False)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @discord.ui.button(label="Whitelist", emoji="🔐", style=discord.ButtonStyle.success)
@@ -622,18 +507,9 @@ class HelpMenu(View):
             title="🔐 Whitelist Commands",
             color=0x2ecc71
         )
-        embed.add_field(
-            name=".addwl <user>",
-            value="Owner only: add a user to the whitelist.",
-            inline=False
-        )
-        embed.add_field(
-            name=".delwl <user>",
-            value="Owner only: remove a user from the whitelist.",
-            inline=False
-        )
+        embed.add_field(name=".addwl <user>", value="Owner only: add user to whitelist.", inline=False)
+        embed.add_field(name=".delwl <user>", value="Owner only: remove user from whitelist.", inline=False)
         await interaction.response.send_message(embed=embed, ephemeral=True)
-
 
 @bot.command()
 async def help(ctx):
@@ -643,9 +519,7 @@ async def help(ctx):
         color=0x5865F2
     )
     embed.set_footer(text="Only whitelisted users (or server owner) can use commands.")
-    view = HelpMenu()
-    await ctx.send(embed=embed, view=view)
-
+    await ctx.send(embed=embed, view=HelpMenu())
 
 # -----------------------------
 # RUN BOT
