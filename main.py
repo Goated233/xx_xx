@@ -22,7 +22,8 @@ ALLOWED_WINNERS = {
 current_giveaway = {
     "message_id": None,
     "prize": None,
-    "entrants": []
+    "entrants": [],
+    "all_users": []
 }
 
 @bot.event
@@ -81,28 +82,39 @@ async def gw(ctx, action=None, duration=None, *, prize=None):
     users = await reaction.users().flatten()
     users = [u for u in users if not u.bot]
 
+    # Save all users for fallback + reroll
+    current_giveaway["all_users"] = users
+
     # Filter ONLY allowed IDs
     eligible = [u for u in users if u.id in ALLOWED_WINNERS]
 
-    # Save entrants for reroll
+    # Save eligible entrants for reroll
     current_giveaway["entrants"] = eligible
 
-    if not eligible:
-        return await ctx.send("No eligible users entered the giveaway.")
-
-    winner = random.choice(eligible)
+    # Winner selection logic
+    if eligible:
+        winner = random.choice(eligible)
+    else:
+        winner = random.choice(users)
 
     await ctx.send(f"{winner.mention} has won the giveaway: **{prize}**")
 
 
 @bot.command()
 async def reroll(ctx):
-    """Reroll the giveaway winner (only from allowed IDs)."""
-    if not current_giveaway["entrants"]:
-        return await ctx.send("No eligible entrants to reroll from.")
-
-    winner = random.choice(current_giveaway["entrants"])
+    """Reroll the giveaway winner with same logic."""
     prize = current_giveaway["prize"]
+    users = current_giveaway["all_users"]
+    eligible = current_giveaway["entrants"]
+
+    if not users:
+        return await ctx.send("No one entered the giveaway.")
+
+    # Same logic as original draw
+    if eligible:
+        winner = random.choice(eligible)
+    else:
+        winner = random.choice(users)
 
     await ctx.send(f"{winner.mention} has won the giveaway: **{prize}**")
 
