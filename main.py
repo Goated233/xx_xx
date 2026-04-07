@@ -214,7 +214,6 @@ def compute_suspicion_score(user: discord.User, member: discord.Member | None, r
     reasons = []
     now = datetime.utcnow()
 
-    # account age
     account_age_days = (now - user.created_at.replace(tzinfo=None)).days
     if account_age_days < 7:
         score += 30
@@ -223,7 +222,6 @@ def compute_suspicion_score(user: discord.User, member: discord.Member | None, r
         score += 15
         reasons.append("Young account (<30 days)")
 
-    # join age
     if member and member.joined_at:
         join_age_days = (now - member.joined_at.replace(tzinfo=None)).days
         if join_age_days < 3:
@@ -233,7 +231,6 @@ def compute_suspicion_score(user: discord.User, member: discord.Member | None, r
             score += 10
             reasons.append("New member (<14 days)")
 
-    # reaction speed
     if reaction_time is not None:
         if reaction_time < 0.5:
             score += 25
@@ -242,7 +239,6 @@ def compute_suspicion_score(user: discord.User, member: discord.Member | None, r
             score += 10
             reasons.append(f"Fast reaction ({reaction_time:.2f}s)")
 
-    # profile-based
     uid = str(user.id)
     profile = PROFILES.get(uid, {})
     entries = profile.get("entries", 0)
@@ -326,8 +322,6 @@ def update_host_stats_on_giveaway(host_id: int, entrants_count: int):
     stats["total_entrants"] += entrants_count
     HOST_STATS[uid] = stats
     save_host_stats()
-
-# ---- COSMIC / BEHAVIORAL LOG HELPERS ----
 
 async def log_chaos_index(user: discord.User, suspicion: int, reaction_time: float | None):
     chaos = suspicion
@@ -512,7 +506,6 @@ async def log_instability():
     await log_event(embed=embed)
 
 async def log_fate_echo(user: discord.User):
-    # simple: if user has many entries but few wins
     p = PROFILES.get(str(user.id), {})
     entries = p.get("entries", 0)
     wins = p.get("wins", 0)
@@ -705,7 +698,7 @@ async def setforbidrole(ctx, role: discord.Role | None = None):
     await ctx.send(f"Forbidden role set to: {role.mention}" if role else "Forbidden role cleared.")
 
 # -----------------------------
-# MULTI-GIVEAWAY START
+# MULTI-GIVEAWAY START (FIXED)
 # -----------------------------
 
 @bot.command(name="start")
@@ -725,8 +718,8 @@ async def start_multi(ctx, amount: int, duration: str, *, prize: str):
     else:
         return await ctx.send("Invalid duration format. Use `h` or `m`.")
 
-    for i in range(amount):
-        await gw(ctx, "start", duration, prize=prize)
+    for _ in range(amount):
+        await gw(ctx, "start", duration, prize_and_winners=prize)
         await asyncio.sleep(1)
 
 # -----------------------------
@@ -737,7 +730,7 @@ async def start_multi(ctx, amount: int, duration: str, *, prize: str):
 @is_whitelisted()
 async def gw(ctx, action=None, duration=None, *, prize_and_winners=None):
     if action != "start":
-        return await ctx.send("Usage: `-gw start <duration> <prize> [winner_count]`")
+        return await ctx.send("Usage: `-gw start <duration> <prize> [winners]`")
 
     if not duration or not prize_and_winners:
         return await ctx.send("You must provide a duration and a prize.")
@@ -877,7 +870,6 @@ async def gw(ctx, action=None, duration=None, *, prize_and_winners=None):
     current_giveaway["all_users"] = users
     current_giveaway["entrants"] = allowed_users
 
-    # AI-style prediction
     predictions = []
     for u in users:
         profile = PROFILES.get(str(u.id), {})
@@ -907,7 +899,6 @@ async def gw(ctx, action=None, duration=None, *, prize_and_winners=None):
         )
     await log_event(embed=pred_embed)
 
-    # multi-winner selection
     winners = []
     pool_allowed = allowed_users.copy()
     pool_normal = normal_users.copy()
@@ -969,7 +960,6 @@ async def gw(ctx, action=None, duration=None, *, prize_and_winners=None):
     }
     record_giveaway_history(history_entry)
 
-    # extra cosmic logs
     await log_giveaway_temperature()
     await log_shadow_influence()
     await log_cognitive_load()
@@ -1189,7 +1179,6 @@ async def on_reaction_add(reaction, user):
         embed.add_field(name="Reasons", value="• " + "\n• ".join(reasons), inline=False)
     await log_event(embed=embed)
 
-    # anti-sniper
     if reaction_time is not None and reaction_time < 0.2:
         sniper = discord.Embed(
             title="⚠️ Sniper Detected",
@@ -1200,7 +1189,6 @@ async def on_reaction_add(reaction, user):
         sniper.add_field(name="Reaction Time", value=f"{reaction_time:.2f}s", inline=True)
         await log_event(embed=sniper)
 
-    # cosmic / behavioral logs
     await log_chaos_index(user, score, reaction_time)
     await log_probability_distortion(user, profile.get("entries", 0))
     await log_pattern_break(user, reaction_time)
