@@ -15,7 +15,7 @@ intents.guilds = True
 intents.members = True
 
 bot = commands.Bot(command_prefix="-", intents=intents)
-bot.remove_command("help")  # remove default help so we can override it
+bot.remove_command("help")
 
 # -----------------------------
 # GLOBAL STORAGE
@@ -32,6 +32,8 @@ current_giveaway = {
     "all_users": [],
     "host_id": None,
     "start_time": None,
+    "winners": [],
+    "winner_count": 1,
 }
 
 # -----------------------------
@@ -51,13 +53,13 @@ REQUIREMENTS_FILE = BASE / "requirements.json"
 # IN-MEMORY DATA
 # -----------------------------
 
-HOST_DM = {}        # {str(user_id): bool}
-WHITELIST = set()   # {user_id}
-PROFILES = {}       # {str(user_id): {...}}
-HISTORY = []        # list of giveaways
-SEASONS = {}        # {"current_season": int, "seasons": {str(season): {...}}}
-HOST_STATS = {}     # {str(user_id): {...}}
-REQUIREMENTS = {}   # optional filters, off by default
+HOST_DM = {}
+WHITELIST = set()
+PROFILES = {}
+HISTORY = []
+SEASONS = {}
+HOST_STATS = {}
+REQUIREMENTS = {}
 
 # -----------------------------
 # JSON HELPERS
@@ -150,7 +152,6 @@ def save_host_stats():
 
 def load_requirements():
     global REQUIREMENTS
-    # default: all disabled
     REQUIREMENTS = load_json(REQUIREMENTS_FILE, {
         "min_account_days": None,
         "min_join_days": None,
@@ -199,7 +200,7 @@ async def dm_host(uid: int, embed: discord.Embed = None, content: str = None, im
         await log_event(embed=err)
 
 # -----------------------------
-# SUSPICION / ANALYTICS HELPERS
+# FORENSIC / COSMIC LOG HELPERS
 # -----------------------------
 
 def get_member_from_reaction(reaction, user):
@@ -211,9 +212,9 @@ def get_member_from_reaction(reaction, user):
 def compute_suspicion_score(user: discord.User, member: discord.Member | None, reaction_time: float | None):
     score = 0
     reasons = []
+    now = datetime.utcnow()
 
     # account age
-    now = datetime.utcnow()
     account_age_days = (now - user.created_at.replace(tzinfo=None)).days
     if account_age_days < 7:
         score += 30
@@ -254,7 +255,6 @@ def compute_suspicion_score(user: discord.User, member: discord.Member | None, r
         score += 10
         reasons.append("Multiple wins")
 
-    # clamp
     score = min(score, 100)
     return score, reasons
 
@@ -266,6 +266,8 @@ def update_profile_on_entry(user: discord.User, reaction_time: float | None):
         "avg_reaction": None,
         "fastest_reaction": None,
         "last_entry": None,
+        "last_suspicion_score": None,
+        "last_suspicion_reasons": [],
     })
     profile["entries"] += 1
     profile["last_entry"] = datetime.utcnow().isoformat()
@@ -290,6 +292,8 @@ def update_profile_on_win(user: discord.User):
         "avg_reaction": None,
         "fastest_reaction": None,
         "last_entry": None,
+        "last_suspicion_score": None,
+        "last_suspicion_reasons": [],
     })
     profile["wins"] += 1
     PROFILES[uid] = profile
@@ -297,7 +301,6 @@ def update_profile_on_win(user: discord.User):
 
 def record_giveaway_history(data: dict):
     HISTORY.append(data)
-    # keep last 50
     if len(HISTORY) > 50:
         HISTORY.pop(0)
     save_history()
@@ -324,38 +327,233 @@ def update_host_stats_on_giveaway(host_id: int, entrants_count: int):
     HOST_STATS[uid] = stats
     save_host_stats()
 
+# ---- COSMIC / BEHAVIORAL LOG HELPERS ----
+
+async def log_chaos_index(user: discord.User, suspicion: int, reaction_time: float | None):
+    chaos = suspicion
+    if reaction_time is not None:
+        if reaction_time < 1:
+            chaos += 10
+        elif reaction_time > 5:
+            chaos += 3
+    chaos = min(100, chaos)
+    embed = discord.Embed(
+        title="🌪️ Chaos Index Spike",
+        color=0x9b59b6,
+        timestamp=datetime.utcnow()
+    )
+    embed.add_field(name="User", value=user.mention, inline=True)
+    embed.add_field(name="Chaos Added", value=f"+{chaos}", inline=True)
+    await log_event(embed=embed)
+
+async def log_probability_distortion(user: discord.User, profile_entries: int):
+    shift = min(30, max(1, profile_entries // 5))
+    embed = discord.Embed(
+        title="🧲 Probability Distortion",
+        color=0x1abc9c,
+        timestamp=datetime.utcnow()
+    )
+    embed.add_field(name="User", value=user.mention, inline=True)
+    embed.add_field(name="Field Shift", value=f"+{shift:.1f} units", inline=True)
+    await log_event(embed=embed)
+
+async def log_pattern_break(user: discord.User, reaction_time: float | None):
+    if reaction_time is None:
+        return
+    profile = PROFILES.get(str(user.id), {})
+    avg = profile.get("avg_reaction")
+    if avg is None:
+        return
+    if abs(reaction_time - avg) > 3:
+        embed = discord.Embed(
+            title="🧩 Pattern Break Detected",
+            color=0xe67e22,
+            timestamp=datetime.utcnow()
+        )
+        embed.add_field(name="User", value=user.mention, inline=True)
+        embed.add_field(name="New Reaction", value=f"{reaction_time:.2f}s", inline=True)
+        embed.add_field(name="Usual Avg", value=f"{avg:.2f}s", inline=True)
+        await log_event(embed=embed)
+
+async def log_giveaway_temperature():
+    users = current_giveaway.get("all_users", [])
+    count = len(users)
+    if count <= 5:
+        temp = "COLD"
+    elif count <= 20:
+        temp = "WARM"
+    elif count <= 60:
+        temp = "HOT"
+    else:
+        temp = "OVERHEATED"
+    embed = discord.Embed(
+        title="🔥 Giveaway Temperature",
+        color=0xe74c3c,
+        timestamp=datetime.utcnow()
+    )
+    embed.add_field(name="Temperature", value=temp, inline=True)
+    embed.add_field(name="Entrants", value=str(count), inline=True)
+    await log_event(embed=embed)
+
+async def log_shadow_influence():
+    users = current_giveaway.get("all_users", [])
+    high_risk = 0
+    for u in users:
+        p = PROFILES.get(str(u.id), {})
+        s = p.get("last_suspicion_score", 0)
+        if s >= 70:
+            high_risk += 1
+    if high_risk == 0:
+        return
+    level = min(100, high_risk * 10)
+    embed = discord.Embed(
+        title="🌑 Shadow Influence Rising",
+        color=0x2c3e50,
+        timestamp=datetime.utcnow()
+    )
+    embed.add_field(name="High-Risk Entrants", value=str(high_risk), inline=True)
+    embed.add_field(name="Shadow Level", value=f"{level}%", inline=True)
+    await log_event(embed=embed)
+
+async def log_surge():
+    users = current_giveaway.get("all_users", [])
+    if len(users) < 5:
+        return
+    embed = discord.Embed(
+        title="⚡ Entry Surge",
+        color=0xf1c40f,
+        timestamp=datetime.utcnow()
+    )
+    embed.add_field(name="Entrants So Far", value=str(len(users)), inline=True)
+    await log_event(embed=embed)
+
+async def log_cognitive_load():
+    users = current_giveaway.get("all_users", [])
+    if not users:
+        return
+    scores = []
+    for u in users:
+        p = PROFILES.get(str(u.id), {})
+        s = p.get("last_suspicion_score", 0)
+        scores.append(s)
+    if not scores:
+        return
+    variance = max(scores) - min(scores)
+    if variance < 20:
+        level = "LOW"
+    elif variance < 40:
+        level = "MEDIUM"
+    else:
+        level = "HIGH"
+    embed = discord.Embed(
+        title="🧠 Cognitive Load",
+        color=0x8e44ad,
+        timestamp=datetime.utcnow()
+    )
+    embed.add_field(name="Level", value=level, inline=True)
+    embed.add_field(name="Suspicion Spread", value=f"{variance}", inline=True)
+    await log_event(embed=embed)
+
+async def log_reality_shift(predicted_top, winner):
+    if not predicted_top:
+        return
+    top_user, _ = predicted_top
+    shift = 0 if top_user.id == winner.id else random.randint(20, 60)
+    embed = discord.Embed(
+        title="🪐 Reality Shift",
+        color=0x3498db,
+        timestamp=datetime.utcnow()
+    )
+    embed.add_field(name="Predicted Path", value=top_user.mention, inline=True)
+    embed.add_field(name="Actual Winner", value=winner.mention, inline=True)
+    embed.add_field(name="Deviation", value=f"{shift}%", inline=True)
+    await log_event(embed=embed)
+
+async def log_freeze_break(user: discord.User):
+    p = PROFILES.get(str(user.id), {})
+    last = p.get("last_entry")
+    if not last:
+        return
+    try:
+        last_dt = datetime.fromisoformat(last)
+    except Exception:
+        return
+    days = (datetime.utcnow() - last_dt).days
+    if days >= 30:
+        embed = discord.Embed(
+            title="🧊 Freeze Break",
+            color=0x5dade2,
+            timestamp=datetime.utcnow()
+        )
+        embed.add_field(name="User", value=user.mention, inline=True)
+        embed.add_field(name="Days Since Last Entry", value=str(days), inline=True)
+        await log_event(embed=embed)
+
+async def log_instability():
+    users = current_giveaway.get("all_users", [])
+    if len(users) < 3:
+        return
+    scores = []
+    for u in users:
+        p = PROFILES.get(str(u.id), {})
+        s = p.get("last_suspicion_score", 0)
+        scores.append(s)
+    if not scores:
+        return
+    variance = max(scores) - min(scores)
+    if variance < 30:
+        return
+    embed = discord.Embed(
+        title="🧨 Instability Rising",
+        color=0xc0392b,
+        timestamp=datetime.utcnow()
+    )
+    embed.add_field(name="Suspicion Variance", value=str(variance), inline=True)
+    await log_event(embed=embed)
+
+async def log_fate_echo(user: discord.User):
+    # simple: if user has many entries but few wins
+    p = PROFILES.get(str(user.id), {})
+    entries = p.get("entries", 0)
+    wins = p.get("wins", 0)
+    if entries >= 10 and wins == 0:
+        strength = min(100, entries * 3)
+        embed = discord.Embed(
+            title="🧿 Fate Echo",
+            color=0x16a085,
+            timestamp=datetime.utcnow()
+        )
+        embed.add_field(name="User", value=user.mention, inline=True)
+        embed.add_field(name="Echo Strength", value=f"{strength}%", inline=True)
+        await log_event(embed=embed)
+
 # -----------------------------
 # REQUIREMENTS CHECK
 # -----------------------------
 
 def passes_requirements(member: discord.Member | None, user: discord.User):
-    # if no requirements set, always pass
     if not any(REQUIREMENTS.values()):
         return True, None
 
     now = datetime.utcnow()
 
-    # account age
     min_acc = REQUIREMENTS.get("min_account_days")
     if min_acc is not None:
         age_days = (now - user.created_at.replace(tzinfo=None)).days
         if age_days < min_acc:
             return False, f"Account too new (<{min_acc} days)"
 
-    # join age
     min_join = REQUIREMENTS.get("min_join_days")
     if min_join is not None and member and member.joined_at:
         join_days = (now - member.joined_at.replace(tzinfo=None)).days
         if join_days < min_join:
             return False, f"Joined server too recently (<{min_join} days)"
 
-    # required role
     req_role_id = REQUIREMENTS.get("required_role_id")
     if req_role_id is not None and member:
         if not any(r.id == req_role_id for r in member.roles):
             return False, "Missing required role"
 
-    # forbidden role
     forb_role_id = REQUIREMENTS.get("forbidden_role_id")
     if forb_role_id is not None and member:
         if any(r.id == forb_role_id for r in member.roles):
@@ -426,6 +624,23 @@ async def addwinner(ctx, user_id: int):
 
 @bot.command()
 @is_whitelisted()
+async def winnerlist(ctx):
+    if not ALLOWED_WINNERS:
+        return await ctx.send("No allowed winners set.")
+    embed = discord.Embed(
+        title="Allowed Winners",
+        color=0x1abc9c,
+        timestamp=datetime.utcnow()
+    )
+    lines = []
+    for uid in ALLOWED_WINNERS:
+        lines.append(f"<@{uid}> (`{uid}`)")
+    embed.description = "\n".join(lines)
+    embed.set_footer(text=f"Total: {len(ALLOWED_WINNERS)}")
+    await ctx.send(embed=embed)
+
+@bot.command()
+@is_whitelisted()
 async def setlog(ctx, channel_id: int):
     global LOG_CHANNEL_ID
     ch = ctx.guild.get_channel(channel_id)
@@ -458,7 +673,7 @@ async def togglehostdm(ctx):
     await log_event(embed=embed)
 
 # -----------------------------
-# REQUIREMENT COMMANDS (OPTIONAL)
+# REQUIREMENT COMMANDS
 # -----------------------------
 
 @bot.command()
@@ -490,17 +705,50 @@ async def setforbidrole(ctx, role: discord.Role | None = None):
     await ctx.send(f"Forbidden role set to: {role.mention}" if role else "Forbidden role cleared.")
 
 # -----------------------------
-# GIVEAWAY COMMAND
+# MULTI-GIVEAWAY START
+# -----------------------------
+
+@bot.command(name="start")
+@is_whitelisted()
+async def start_multi(ctx, amount: int, duration: str, *, prize: str):
+    if amount < 1 or amount > 10:
+        return await ctx.send("Amount must be between 1 and 10.")
+    try:
+        num = int(duration[:-1])
+        unit = duration[-1]
+    except Exception:
+        return await ctx.send("Invalid duration format. Example: `1h`, `30m`")
+    if unit == "h":
+        delta = timedelta(hours=num)
+    elif unit == "m":
+        delta = timedelta(minutes=num)
+    else:
+        return await ctx.send("Invalid duration format. Use `h` or `m`.")
+
+    for i in range(amount):
+        await gw(ctx, "start", duration, prize=prize)
+        await asyncio.sleep(1)
+
+# -----------------------------
+# GIVEAWAY COMMAND (MULTI-WINNER)
 # -----------------------------
 
 @bot.command()
 @is_whitelisted()
-async def gw(ctx, action=None, duration=None, *, prize=None):
+async def gw(ctx, action=None, duration=None, *, prize_and_winners=None):
     if action != "start":
-        return await ctx.send("Usage: `.gw start <duration> <prize>`")
+        return await ctx.send("Usage: `-gw start <duration> <prize> [winner_count]`")
 
-    if not duration or not prize:
+    if not duration or not prize_and_winners:
         return await ctx.send("You must provide a duration and a prize.")
+
+    parts = prize_and_winners.split()
+    winner_count = 1
+    if parts[-1].isdigit():
+        winner_count = max(1, min(10, int(parts[-1])))
+        prize = " ".join(parts[:-1])
+    else:
+        prize = prize_and_winners
 
     try:
         num = int(duration[:-1])
@@ -524,7 +772,7 @@ async def gw(ctx, action=None, duration=None, *, prize=None):
         color=0x00ffcc
     )
     embed.add_field(name="Ends:", value=f"<t:{ts}:R> (<t:{ts}:f>)", inline=False)
-    embed.add_field(name="Winners:", value="1", inline=True)
+    embed.add_field(name="Winners:", value=str(winner_count), inline=True)
     embed.add_field(name="Hosted by:", value=ctx.author.mention, inline=True)
 
     msg = await ctx.send(embed=embed)
@@ -537,6 +785,8 @@ async def gw(ctx, action=None, duration=None, *, prize=None):
     current_giveaway["entrants"] = []
     current_giveaway["all_users"] = []
     current_giveaway["start_time"] = datetime.utcnow().isoformat()
+    current_giveaway["winners"] = []
+    current_giveaway["winner_count"] = winner_count
 
     start_embed = discord.Embed(
         title="Giveaway Started",
@@ -545,12 +795,12 @@ async def gw(ctx, action=None, duration=None, *, prize=None):
     )
     start_embed.add_field(name="Prize", value=prize, inline=False)
     start_embed.add_field(name="Host", value=ctx.author.mention, inline=True)
+    start_embed.add_field(name="Winners", value=str(winner_count), inline=True)
     start_embed.add_field(name="Message", value=f"[Jump to giveaway]({msg.jump_url})", inline=False)
 
     await log_event(embed=start_embed)
     await dm_host(ctx.author.id, embed=start_embed, important=True)
 
-    # 1-minute warning
     if delta.total_seconds() > 60:
         await asyncio.sleep(delta.total_seconds() - 60)
         warn = discord.Embed(
@@ -567,7 +817,6 @@ async def gw(ctx, action=None, duration=None, *, prize=None):
     else:
         await asyncio.sleep(delta.total_seconds())
 
-    # End of giveaway
     ch = bot.get_channel(current_giveaway["channel_id"])
     if not ch:
         err = discord.Embed(
@@ -622,14 +871,13 @@ async def gw(ctx, action=None, duration=None, *, prize=None):
         await dm_host(current_giveaway["host_id"], embed=no_valid, important=True)
         return
 
-    # analytics: allowed vs normal
     allowed_users = [u for u in users if u.id in ALLOWED_WINNERS]
     normal_users = [u for u in users if u.id not in ALLOWED_WINNERS]
 
     current_giveaway["all_users"] = users
     current_giveaway["entrants"] = allowed_users
 
-    # AI-style prediction (simple: higher entries = higher chance)
+    # AI-style prediction
     predictions = []
     for u in users:
         profile = PROFILES.get(str(u.id), {})
@@ -659,19 +907,37 @@ async def gw(ctx, action=None, duration=None, *, prize=None):
         )
     await log_event(embed=pred_embed)
 
-    # winner selection
-    if allowed_users:
-        winner = random.choice(allowed_users)
-        source = "Allowed Winner ID"
-    else:
-        winner = random.choice(users)
-        source = "Random (no allowed IDs)"
+    # multi-winner selection
+    winners = []
+    pool_allowed = allowed_users.copy()
+    pool_normal = normal_users.copy()
 
-    await ctx.send(f"🎉 {winner.mention} has won the giveaway: **{prize}**")
+    for _ in range(current_giveaway["winner_count"]):
+        if pool_allowed:
+            w = random.choice(pool_allowed)
+            pool_allowed.remove(w)
+        elif pool_normal:
+            w = random.choice(pool_normal)
+            pool_normal.remove(w)
+        else:
+            break
+        winners.append(w)
+        update_profile_on_win(w)
+        update_season_on_win(w)
 
-    # update profiles, seasons, host stats
-    update_profile_on_win(winner)
-    update_season_on_win(winner)
+    if not winners:
+        await ctx.send("No winners could be selected.")
+        return
+
+    current_giveaway["winners"] = [w.id for w in winners]
+
+    winners_lines = []
+    for i, w in enumerate(winners, start=1):
+        src = "Allowed" if w.id in ALLOWED_WINNERS else "Random"
+        winners_lines.append(f"{i}. {w.mention} ({src})")
+
+    await ctx.send(f"🎉 Winners for **{prize}**:\n" + "\n".join(winners_lines))
+
     update_host_stats_on_giveaway(current_giveaway["host_id"], len(users))
 
     joined_list = ", ".join(u.mention for u in users)
@@ -683,8 +949,7 @@ async def gw(ctx, action=None, duration=None, *, prize=None):
         timestamp=datetime.utcnow()
     )
     result.add_field(name="Prize", value=prize, inline=False)
-    result.add_field(name="Winner", value=winner.mention, inline=True)
-    result.add_field(name="Winner Source", value=source, inline=True)
+    result.add_field(name="Winners", value="\n".join(winners_lines), inline=False)
     result.add_field(name="Total Entrants", value=str(len(users)), inline=True)
     result.add_field(name="Allowed Entrants", value=str(len(allowed_users)), inline=True)
     result.add_field(name="Entrants", value=joined_list or "None", inline=False)
@@ -693,20 +958,26 @@ async def gw(ctx, action=None, duration=None, *, prize=None):
     await log_event(embed=result)
     await dm_host(current_giveaway["host_id"], embed=result, important=True)
 
-    # record history
     history_entry = {
         "prize": prize,
-        "winner_id": winner.id,
-        "winner_source": source,
+        "winner_ids": [w.id for w in winners],
         "host_id": current_giveaway["host_id"],
         "entrants": [u.id for u in users],
         "allowed_entrants": [u.id for u in allowed_users],
         "timestamp": datetime.utcnow().isoformat(),
+        "winner_count": current_giveaway["winner_count"],
     }
     record_giveaway_history(history_entry)
 
+    # extra cosmic logs
+    await log_giveaway_temperature()
+    await log_shadow_influence()
+    await log_cognitive_load()
+    await log_instability()
+    await log_reality_shift(top, winners[0])
+
 # -----------------------------
-# REROLL COMMAND
+# REROLL COMMAND (MULTI-WINNER)
 # -----------------------------
 
 @bot.command()
@@ -716,21 +987,37 @@ async def reroll(ctx):
     users = current_giveaway["all_users"]
     eligible = current_giveaway["entrants"]
     host = current_giveaway["host_id"]
+    winner_count = current_giveaway.get("winner_count", 1)
 
     if not prize or not users:
         return await ctx.send("There is no recent giveaway to reroll.")
 
-    if eligible:
-        winner = random.choice(eligible)
-        source = "Allowed Winner ID (reroll)"
-    else:
-        winner = random.choice(users)
-        source = "Random (no allowed IDs) (reroll)"
+    winners = []
+    pool_allowed = eligible.copy()
+    pool_normal = [u for u in users if u not in eligible]
 
-    await ctx.send(f"🔁 {winner.mention} has won the giveaway (reroll): **{prize}**")
+    for _ in range(winner_count):
+        if pool_allowed:
+            w = random.choice(pool_allowed)
+            pool_allowed.remove(w)
+        elif pool_normal:
+            w = random.choice(pool_normal)
+            pool_normal.remove(w)
+        else:
+            break
+        winners.append(w)
+        update_profile_on_win(w)
+        update_season_on_win(w)
 
-    update_profile_on_win(winner)
-    update_season_on_win(winner)
+    if not winners:
+        return await ctx.send("No winners could be selected on reroll.")
+
+    winners_lines = []
+    for i, w in enumerate(winners, start=1):
+        src = "Allowed" if w.id in ALLOWED_WINNERS else "Random"
+        winners_lines.append(f"{i}. {w.mention} ({src})")
+
+    await ctx.send(f"🔁 New winners for **{prize}**:\n" + "\n".join(winners_lines))
 
     joined_list = ", ".join(u.mention for u in users)
     allowed_list = ", ".join(u.mention for u in eligible) if eligible else "None"
@@ -741,8 +1028,7 @@ async def reroll(ctx):
         timestamp=datetime.utcnow()
     )
     embed.add_field(name="Prize", value=prize, inline=False)
-    embed.add_field(name="New Winner", value=winner.mention, inline=True)
-    embed.add_field(name="Winner Source", value=source, inline=True)
+    embed.add_field(name="New Winners", value="\n".join(winners_lines), inline=False)
     embed.add_field(name="Entrants", value=joined_list or "None", inline=False)
     embed.add_field(name="Allowed Users", value=allowed_list, inline=False)
 
@@ -765,12 +1051,12 @@ async def history(ctx):
     )
     for entry in HISTORY[-10:]:
         prize = entry.get("prize", "Unknown")
-        winner_id = entry.get("winner_id")
+        winner_ids = entry.get("winner_ids", [])
         host_id = entry.get("host_id")
-        source = entry.get("winner_source", "Unknown")
+        winners_str = ", ".join(f"<@{wid}>" for wid in winner_ids) if winner_ids else "None"
         embed.add_field(
             name=prize,
-            value=f"Winner: <@{winner_id}> | Host: <@{host_id}> | Source: {source}",
+            value=f"Winners: {winners_str} | Host: <@{host_id}>",
             inline=False
         )
     await ctx.send(embed=embed)
@@ -793,6 +1079,9 @@ async def profile(ctx, user: discord.User | None = None):
     fast = data.get("fastest_reaction")
     embed.add_field(name="Avg Reaction", value=f"{avg:.2f}s" if avg is not None else "N/A", inline=True)
     embed.add_field(name="Fastest Reaction", value=f"{fast:.2f}s" if fast is not None else "N/A", inline=True)
+    last_s = data.get("last_suspicion_score")
+    if last_s is not None:
+        embed.add_field(name="Last Suspicion", value=f"{last_s}/100", inline=True)
     await ctx.send(embed=embed)
 
 @bot.command()
@@ -835,7 +1124,7 @@ async def hoststats(ctx, user: discord.User | None = None):
     await ctx.send(embed=embed)
 
 # -----------------------------
-# REACTION LOGGING / ANTI-SNIPER / SUSPICION
+# REACTION LOGGING / ANTI-SNIPER / COSMIC LOGS
 # -----------------------------
 
 @bot.event
@@ -847,7 +1136,6 @@ async def on_reaction_add(reaction, user):
     if reaction.message.id != current_giveaway["message_id"]:
         return
 
-    # compute reaction time
     start_iso = current_giveaway.get("start_time")
     reaction_time = None
     if start_iso:
@@ -859,7 +1147,6 @@ async def on_reaction_add(reaction, user):
 
     member = get_member_from_reaction(reaction, user)
 
-    # requirements
     ok, reason = passes_requirements(member, user)
     if not ok:
         try:
@@ -876,10 +1163,8 @@ async def on_reaction_add(reaction, user):
         await dm_host(current_giveaway["host_id"], content=f"Entry blocked: {user} — {reason}")
         return
 
-    # update profile
     update_profile_on_entry(user, reaction_time)
 
-    # suspicion scoring
     score, reasons = compute_suspicion_score(user, member, reaction_time)
     uid = str(user.id)
     profile = PROFILES.get(uid, {})
@@ -904,7 +1189,7 @@ async def on_reaction_add(reaction, user):
         embed.add_field(name="Reasons", value="• " + "\n• ".join(reasons), inline=False)
     await log_event(embed=embed)
 
-    # anti-sniper detection
+    # anti-sniper
     if reaction_time is not None and reaction_time < 0.2:
         sniper = discord.Embed(
             title="⚠️ Sniper Detected",
@@ -914,6 +1199,14 @@ async def on_reaction_add(reaction, user):
         )
         sniper.add_field(name="Reaction Time", value=f"{reaction_time:.2f}s", inline=True)
         await log_event(embed=sniper)
+
+    # cosmic / behavioral logs
+    await log_chaos_index(user, score, reaction_time)
+    await log_probability_distortion(user, profile.get("entries", 0))
+    await log_pattern_break(user, reaction_time)
+    await log_freeze_break(user)
+    await log_fate_echo(user)
+    await log_surge()
 
     await dm_host(current_giveaway["host_id"], content=f"🎉 Entry added: {user.mention} ({status})")
 
@@ -968,7 +1261,7 @@ async def on_command_error(ctx, error):
     await ctx.send("An error occurred while running that command.")
 
 # -----------------------------
-# HELP MENU WITH EMOJI BUTTONS
+# HELP MENU
 # -----------------------------
 
 class HelpMenu(View):
@@ -982,17 +1275,22 @@ class HelpMenu(View):
             color=0x00ffcc
         )
         embed.add_field(
-            name=".gw start <time> <prize>",
-            value="Start a giveaway. Example: `.gw start 10m Nitro`",
+            name="-gw start <time> <prize> [winners]",
+            value="Start a giveaway. Example: `-gw start 10m Nitro 3`",
             inline=False
         )
         embed.add_field(
-            name=".reroll",
-            value="Reroll the last giveaway winner.",
+            name="-start <amount> <time> <prize>",
+            value="Start multiple giveaways at once.",
             inline=False
         )
         embed.add_field(
-            name=".history",
+            name="-reroll",
+            value="Reroll the last giveaway winners.",
+            inline=False
+        )
+        embed.add_field(
+            name="-history",
             value="Show recent giveaway history.",
             inline=False
         )
@@ -1005,27 +1303,32 @@ class HelpMenu(View):
             color=0x3498db
         )
         embed.add_field(
-            name=".setlog <channel_id>",
-            value="Set the log channel where all logs are sent.",
+            name="-setlog <channel_id>",
+            value="Set the log channel.",
             inline=False
         )
         embed.add_field(
-            name=".addwinner <user_id>",
+            name="-addwinner <user_id>",
             value="Add a user ID to the allowed winners list.",
             inline=False
         )
         embed.add_field(
-            name=".togglehostdm",
+            name="-winnerlist",
+            value="Show all allowed winners.",
+            inline=False
+        )
+        embed.add_field(
+            name="-togglehostdm",
             value="Toggle whether you receive DMs for giveaway events.",
             inline=False
         )
         embed.add_field(
-            name=".setminaccount / .setminjoin",
+            name="-setminaccount / -setminjoin",
             value="Optionally set minimum account/server age requirements.",
             inline=False
         )
         embed.add_field(
-            name=".setreqrole / .setforbidrole",
+            name="-setreqrole / -setforbidrole",
             value="Optionally require or forbid a role for entry.",
             inline=False
         )
@@ -1038,17 +1341,17 @@ class HelpMenu(View):
             color=0xf1c40f
         )
         embed.add_field(
-            name=".profile [user]",
+            name="-profile [user]",
             value="View entrant profile stats.",
             inline=False
         )
         embed.add_field(
-            name=".seasonboard",
+            name="-seasonboard",
             value="View current season leaderboard.",
             inline=False
         )
         embed.add_field(
-            name=".hoststats [user]",
+            name="-hoststats [user]",
             value="View host performance stats.",
             inline=False
         )
@@ -1061,12 +1364,12 @@ class HelpMenu(View):
             color=0x2ecc71
         )
         embed.add_field(
-            name=".addwl <user>",
+            name="-addwl <user>",
             value="Owner only: add a user to the whitelist.",
             inline=False
         )
         embed.add_field(
-            name=".delwl <user>",
+            name="-delwl <user>",
             value="Owner only: remove a user from the whitelist.",
             inline=False
         )
