@@ -1,4 +1,3 @@
-```python
 import discord
 from discord.ext import commands
 from discord.ui import View, Button
@@ -1290,4 +1289,3 @@ async def on_ready():
 # -----------------------------
 
 bot.run(os.getenv("TOKEN"))
-```
